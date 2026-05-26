@@ -163,14 +163,22 @@ fn handle_copilot_cli(cmd: &str) -> Result<()> {
 }
 
 fn copilot_cli_response(cmd: &str) -> Option<Value> {
-    if permissions::check_command(cmd) == PermissionVerdict::Deny {
+    copilot_cli_response_for_verdict(cmd, permissions::check_command(cmd))
+}
+
+fn copilot_cli_response_for_verdict(cmd: &str, verdict: PermissionVerdict) -> Option<Value> {
+    if verdict == PermissionVerdict::Deny {
         audit_log("deny", cmd, "");
         return None;
     }
     let rewritten = get_rewritten(cmd)?;
     audit_log("rewrite", cmd, &rewritten);
+    let decision = match verdict {
+        PermissionVerdict::Allow => "allow",
+        _ => "ask",
+    };
     Some(json!({
-        "permissionDecision": "allow",
+        "permissionDecision": decision,
         "permissionDecisionReason": "RTK auto-rewrite",
         "modifiedArgs": { "command": rewritten }
     }))
@@ -621,10 +629,25 @@ mod tests {
     // --- Copilot CLI handler: transparent rewrite via modifiedArgs ---
 
     #[test]
-    fn test_copilot_cli_transparent_rewrite() {
-        let r = copilot_cli_response("cargo test").unwrap();
+    fn test_copilot_cli_default_verdict_returns_ask_with_rewrite() {
+        let r = copilot_cli_response_for_verdict("cargo test", PermissionVerdict::Default).unwrap();
+        assert_eq!(
+            r["permissionDecision"], "ask",
+            "Default must be 'ask' so the user is still prompted for the rewritten command"
+        );
+        assert_eq!(r["modifiedArgs"]["command"], "rtk cargo test");
+    }
+
+    #[test]
+    fn test_copilot_cli_explicit_allow_returns_allow_with_rewrite() {
+        let r = copilot_cli_response_for_verdict("cargo test", PermissionVerdict::Allow).unwrap();
         assert_eq!(r["permissionDecision"], "allow");
         assert_eq!(r["modifiedArgs"]["command"], "rtk cargo test");
+    }
+
+    #[test]
+    fn test_copilot_cli_deny_verdict_returns_none() {
+        assert!(copilot_cli_response_for_verdict("cargo test", PermissionVerdict::Deny).is_none());
     }
 
     #[test]
